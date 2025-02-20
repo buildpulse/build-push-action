@@ -112,6 +112,18 @@ export async function getArgs(inputs: Inputs, toolkit: Toolkit): Promise<Array<s
   ];
 }
 
+function getImageName(imageReference: string): string {
+  const parts = imageReference.split('/');
+  const imageNameWithTag = parts.length > 1 ? parts.pop() : parts[0];
+
+  if (!imageNameWithTag || imageNameWithTag.length === 0) {
+    return '';
+  }
+
+  const imageName = imageNameWithTag.includes(':') ? imageNameWithTag.split(':')[0] : imageNameWithTag;
+  return imageName;
+}
+
 async function getBuildArgs(inputs: Inputs, context: string, toolkit: Toolkit): Promise<Array<string>> {
   const args: Array<string> = ['build'];
   await Util.asyncForEach(inputs['add-hosts'], async addHost => {
@@ -145,9 +157,21 @@ async function getBuildArgs(inputs: Inputs, context: string, toolkit: Toolkit): 
   await Util.asyncForEach(inputs['cache-from'], async cacheFrom => {
     args.push('--cache-from', cacheFrom);
   });
-  await Util.asyncForEach(inputs['cache-to'], async cacheTo => {
-    args.push('--cache-to', cacheTo);
-  });
+
+  // add buildpulse build cache to --cache-from, and override given --cache-to (https://docs.docker.com/build/cache/backends/#multiple-caches)
+  const dockerRegistry = process.env.BP_DOCKER_REGISTRY;
+  if (dockerRegistry && dockerRegistry.length > 0) {
+    const firstImageName = inputs.tags.length > 0 ? inputs.tags[0] : '';
+    const imageName = getImageName(firstImageName);
+    const cachedImageName = `${dockerRegistry}/${imageName}:buildcache`;
+
+    const cacheFromArg = `type=registry,ref=${cachedImageName}`;
+    args.push('--cache-from', cacheFromArg);
+
+    const cacheToArg = `${cacheFromArg},mode=max`;
+    args.push('--cache-to', cacheToArg);
+  }
+
   if (inputs.call) {
     if (!(await toolkit.buildx.versionSatisfies('>=0.15.0'))) {
       throw new Error(`Buildx >= 0.15.0 is required to use the call flag.`);
