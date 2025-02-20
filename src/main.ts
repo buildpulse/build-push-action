@@ -264,7 +264,7 @@ function buildSummaryEnabled(): boolean {
   } else if (process.env.DOCKER_BUILD_SUMMARY) {
     return Util.parseBool(process.env.DOCKER_BUILD_SUMMARY);
   }
-  return true;
+  return false;
 }
 
 function buildRecordUploadEnabled(): boolean {
