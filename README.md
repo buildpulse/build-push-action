@@ -273,7 +273,9 @@ The following outputs are available:
 
 ## Troubleshooting
 
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+If build jobs **time out intermittently**, especially when many jobs run in parallel (e.g. on EKS/ARC), the limit is the **job** timeout, not the action. See [Job timeout when running builds in parallel](TROUBLESHOOTING.md#job-timeout-when-running-builds-in-parallel) for fixes: set `timeout-minutes` on the job, optionally limit concurrency, ensure `BP_DOCKER_REGISTRY` is set for cluster cache, and ensure any registry-mirror ConfigMap is mounted into the Docker daemon used by the build.
 
 ## Contributing
 

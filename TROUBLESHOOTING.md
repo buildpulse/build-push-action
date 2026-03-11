@@ -1,9 +1,29 @@
 # Troubleshooting
 
+* [Job timeout when running builds in parallel](#job-timeout-when-running-builds-in-parallel)
+  * [buildkitd.sock: connect: no such file or directory](#5-buildkitdsock-connect-no-such-file-or-directory-and-job-timeout)
 * [Cannot push to a registry](#cannot-push-to-a-registry)
   * [BuildKit container logs](#buildkit-container-logs)
   * [With containerd](#with-containerd)
 * [`repository name must be lowercase`](#repository-name-must-be-lowercase)
+
+## Job timeout when running builds in parallel
+
+If you see:
+
+```text
+error: dial unix /run/buildkit/buildkitd.sock: connect: no such file or directory
+Error: The action 'Build' has timed out after 20 minutes.
+```
+
+the BuildKit daemon was not ready (or disappeared) when the build ran. That can happen when many jobs run in parallel: the builder container may start slowly, or the node may be under resource pressure.
+
+This action (v6) includes **durability handling** for that case:
+
+1. **Wait for builder** – Before running the build, the action runs `docker buildx inspect --bootstrap` with retries (up to ~2 minutes). That ensures the BuildKit daemon is up before the build starts, and fails fast with a clear error if it never becomes ready.
+2. **Retry on socket error** – If the build fails with a BuildKit socket error (`buildkitd.sock`, `no such file or directory`), the action retries the build up to 3 times with a short delay between attempts.
+
+You should still set a **job timeout** (e.g. `timeout-minutes: 45`) so that if the daemon never comes up or the build keeps failing, the job fails in a predictable time instead of hanging for 20 minutes. See [Job timeout when running builds in parallel](#job-timeout-when-running-builds-in-parallel) for workflow-level options.
 
 ## Cannot push to a registry
 

@@ -82,6 +82,10 @@ actionsToolkit.run(
       await toolkit.buildx.printVersion();
     });
 
+    await core.group(`Wait for builder`, async () => {
+      await waitForBuilderReady(inputs.builder);
+    });
+
     let builder: BuilderInfo;
     await core.group(`Builder info`, async () => {
       builder = await toolkit.builder.inspect(inputs.builder);
@@ -96,23 +100,8 @@ actionsToolkit.run(
     core.debug(`buildCmd.args: ${JSON.stringify(buildCmd.args)}`);
 
     let err: Error | undefined;
-    await Exec.getExecOutput(buildCmd.command, buildCmd.args, {
-      ignoreReturnCode: true,
-      env: Object.assign({}, process.env, {
-        BUILDX_METADATA_WARNINGS: 'true'
-      }) as {
-        [key: string]: string;
-      }
-    }).then(res => {
-      if (res.exitCode != 0) {
-        if (inputs.call && inputs.call === 'check' && res.stdout.length > 0) {
-          // checks warnings are printed to stdout: https://github.com/docker/buildx/pull/2647
-          // take the first line with the message summaryzing the warnings
-          err = Error(res.stdout.split('\n')[0]?.trim());
-        } else if (res.stderr.length > 0) {
-          err = Error(`buildx failed with: ${res.stderr.match(/(.*)\s*$/)?.[0]?.trim() ?? 'unknown error'}`);
-        }
-      }
+    await runBuildWithRetry(buildCmd, inputs).then(e => {
+      err = e;
     });
 
     const imageID = toolkit.buildxBuild.resolveImageID();
@@ -230,6 +219,102 @@ actionsToolkit.run(
     }
   }
 );
+
+const WAIT_FOR_BUILDER_RETRIES = 12;
+const WAIT_FOR_BUILDER_DELAY_MS = 10_000;
+const BUILD_SOCKET_RETRY_ATTEMPTS = 3;
+const BUILD_SOCKET_RETRY_DELAY_MS = 15_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isBuildKitSocketError(stderr: string): boolean {
+  return (
+    /buildkitd\.sock/i.test(stderr) ||
+    (/connect:/i.test(stderr) && /no such file or directory/i.test(stderr))
+  );
+}
+
+async function waitForBuilderReady(builderName: string | undefined): Promise<void> {
+  const inspectArgs = ['buildx', 'inspect', '--bootstrap'];
+  if (builderName && builderName.length > 0) {
+    inspectArgs.splice(2, 0, builderName);
+  }
+  for (let attempt = 1; attempt <= WAIT_FOR_BUILDER_RETRIES; attempt++) {
+    const res = await Exec.getExecOutput('docker', inspectArgs, {
+      ignoreReturnCode: true,
+      silent: attempt > 1
+    });
+    if (res.exitCode === 0) {
+      if (attempt > 1) {
+        core.info(`Builder ready after ${attempt} attempt(s).`);
+      }
+      return;
+    }
+    if (!isBuildKitSocketError(res.stderr) && !/no such file or directory/i.test(res.stderr)) {
+      core.warning(`buildx inspect --bootstrap failed (not a socket error): ${res.stderr.trim() || res.stdout.trim()}`);
+      return;
+    }
+    if (attempt < WAIT_FOR_BUILDER_RETRIES) {
+      core.info(
+        `BuildKit daemon not ready (attempt ${attempt}/${WAIT_FOR_BUILDER_RETRIES}), retrying in ${WAIT_FOR_BUILDER_DELAY_MS / 1000}s...`
+      );
+      await sleep(WAIT_FOR_BUILDER_DELAY_MS);
+    } else {
+      throw new Error(
+        `BuildKit daemon did not become ready after ${WAIT_FOR_BUILDER_RETRIES} attempts. ` +
+          `Ensure the runner has resources for the builder container and see https://github.com/docker/setup-buildx-action. ` +
+          `Last error: ${res.stderr.trim() || res.stdout.trim() || 'unknown'}`
+      );
+    }
+  }
+}
+
+async function runBuildWithRetry(
+  buildCmd: {command: string; args: string[]},
+  inputs: context.Inputs
+): Promise<Error | undefined> {
+  const env = Object.assign({}, process.env, {
+    BUILDX_METADATA_WARNINGS: 'true'
+  }) as {[key: string]: string};
+  let lastRes: {exitCode: number; stdout: string; stderr: string} | undefined;
+  for (let attempt = 1; attempt <= BUILD_SOCKET_RETRY_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      core.info(
+        `Retrying build (attempt ${attempt}/${BUILD_SOCKET_RETRY_ATTEMPTS}) after BuildKit socket error, waiting ${BUILD_SOCKET_RETRY_DELAY_MS / 1000}s...`
+      );
+      await sleep(BUILD_SOCKET_RETRY_DELAY_MS);
+    }
+    const res = await Exec.getExecOutput(buildCmd.command, buildCmd.args, {
+      ignoreReturnCode: true,
+      env
+    });
+    lastRes = res;
+    if (res.exitCode === 0) {
+      return undefined;
+    }
+    const shouldRetry =
+      attempt < BUILD_SOCKET_RETRY_ATTEMPTS && isBuildKitSocketError(res.stderr);
+    if (!shouldRetry) {
+      if (inputs.call && inputs.call === 'check' && res.stdout.length > 0) {
+        return Error(res.stdout.split('\n')[0]?.trim());
+      }
+      if (res.stderr.length > 0) {
+        return Error(
+          `buildx failed with: ${res.stderr.match(/(.*)\s*$/)?.[0]?.trim() ?? 'unknown error'}`
+        );
+      }
+      return Error('buildx failed with unknown error');
+    }
+  }
+  if (lastRes && lastRes.stderr.length > 0) {
+    return Error(
+      `buildx failed after ${BUILD_SOCKET_RETRY_ATTEMPTS} attempts (BuildKit socket errors): ${lastRes.stderr.match(/(.*)\s*$/)?.[0]?.trim() ?? 'unknown error'}`
+    );
+  }
+  return Error('buildx failed after retries');
+}
 
 async function buildRef(toolkit: Toolkit, since: Date, builder?: string): Promise<string> {
   // get ref from metadata file
