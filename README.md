@@ -1,3 +1,6 @@
+> [!WARNING]
+> **Deprecated.** This fork targeted the retired BuildPulse v1 remote-builder pool and does not work on BuildPulse v2 runners. Use [`buildpulse/setup-docker-builder`](https://github.com/buildpulse/setup-docker-builder) with the standard [`docker/build-push-action`](https://github.com/docker/build-push-action) instead.
+
 [![GitHub release](https://img.shields.io/github/release/docker/build-push-action.svg?style=flat-square)](https://github.com/docker/build-push-action/releases/latest)
 [![GitHub marketplace](https://img.shields.io/badge/marketplace-build--and--push--docker--images-blue?logo=github&style=flat-square)](https://github.com/marketplace/actions/build-and-push-docker-images)
 [![CI workflow](https://img.shields.io/github/actions/workflow/status/docker/build-push-action/ci.yml?branch=master&label=ci&logo=github&style=flat-square)](https://github.com/docker/build-push-action/actions?workflow=ci)
